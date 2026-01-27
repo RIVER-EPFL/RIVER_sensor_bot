@@ -46,6 +46,7 @@ See `INSTALL.md` for detailed setup instructions.
 ```
 /status                    - Display all sensor readings
 /alarms                    - Show active alarms only
+/stations                  - List all available stations
 /latest <station>          - Show readings for specific station
 /1d <station> <param>      - Plot last 1 day of data
 /3d <station> <param>      - Plot last 3 days of data

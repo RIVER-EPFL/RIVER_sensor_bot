@@ -434,6 +434,20 @@ format_status <- function(data) {
   lines <- character()
   for (st in unique(data$station)) {
     rows <- data[data$station == st, ]
+    
+    # Add order column if not present
+    if (!"order" %in% names(rows)) {
+      rows$order <- sapply(rows$parameter, function(p) {
+        for (mapping in PARAM_MAPPING) {
+          if (p == mapping$name) return(mapping$order)
+        }
+        return(999)
+      })
+    }
+    
+    # Sort by order
+    rows <- rows[order(rows$order), ]
+    
     lines <- c(lines, paste0("📍 ", st))
     for (i in 1:nrow(rows)) {
       emoji <- if (rows$severity[i] == 2) "🔴" else if (rows$severity[i] == 1) "🟡" else "🟢"
@@ -795,62 +809,22 @@ dispatch_command <- function(chat_id, text) {
     
     send_message(chat_id, paste(lines, collapse = "\n"))
     
+  } else if (cmd == "/stations") {
+    data <- read_status()
+    if (is.null(data)) {
+      send_message(chat_id, "❌ Data unavailable")
+      return()
+    }
+    stations <- unique(data$station)
+    if (length(stations) == 0) {
+      send_message(chat_id, "No stations found")
+    } else {
+      station_list <- paste0("📍 Available Stations:\n\n", paste(stations, collapse = "\n"))
+      send_message(chat_id, station_list)
+    }
+    
   } else if (cmd == "/ping") {
     send_message(chat_id, "🏓 pong")
-    
-    
-  } else if (cmd == "/coffee") {
-    send_message(chat_id, "☕ The bot runs on coffee and data!\n\n*beep boop* ... need more caffeine...")
-    
-  } else if (cmd == "/weather") {
-    weather_msgs <- c(
-      "🌤️ Perfect weather for monitoring sensors!",
-      "⛈️ Storm approaching... better check those sensors!",
-      "☀️ Sunny day = happy sensors",
-      "🌧️ Rain detected... or is it just the turbidity sensor?",
-      "❄️ Winter is coming... check those battery voltages!"
-    )
-    send_message(chat_id, sample(weather_msgs, 1))
-    
-  } else if (cmd == "/wisdom") {
-    wisdom <- c(
-      "💡 A sensor in alarm is worth two in OK status",
-      "🧠 The best time to check sensors was yesterday. The second best time is now.",
-      "⚡ With great voltage comes great responsibility",
-      "🌊 You can't cross the river without monitoring its depth",
-      "📊 In data we trust, all others must bring plots",
-      "🔋 Battery low? Morale high!",
-      "🎯 Measure twice, alert once"
-    )
-    send_message(chat_id, sample(wisdom, 1))
-    
-  } else if (cmd == "/dance") {
-    send_message(chat_id, "💃🕺\n  ┏(･o･)┛\n  ┗(･o･)┓\n  ┗(･o･)┛\n  ┏(･o･)┓\n\nBot is dancing! Sensors are grooving!")
-    
-  } else if (cmd == "/motivate") {
-    motivation <- c(
-      "💪 You got this! Those sensors won't monitor themselves!",
-      "🌟 Every alarm is an opportunity to save the day!",
-      "🚀 To infinity and beyond... but first, check the battery voltage!",
-      "⭐ You're doing amazing! Keep those rivers monitored!",
-      "🎉 Another day, another dataset. You're crushing it!",
-      "🏆 Sensor monitoring champion right here!"
-    )
-    send_message(chat_id, sample(motivation, 1))
-    
-  } else if (cmd == "/joke") {
-    jokes <- c(
-      "Why did the sensor go to therapy?\nIt had too many issues! 🤖",
-      "What's a sensor's favorite music?\nHeavy metal... voltage! ⚡",
-      "Why don't sensors ever lie?\nBecause the data doesn't lie! 📊",
-      "How do sensors stay in shape?\nThey do circuit training! 💪",
-      "What did the battery say to the sensor?\nI'm feeling a bit drained today... 🔋",
-      "Why was the turbidity sensor always confused?\nThings were never clear! 🌊"
-    )
-    send_message(chat_id, sample(jokes, 1))
-    
-  } else if (cmd == "/secret") {
-    send_message(chat_id, "🤫 Psst... the real secret is that I'm powered by Swiss precision and coffee!\n\n🇨🇭☕🤖")
     
   } else if (cmd == "/help") {
     help_text <- paste(
@@ -859,6 +833,7 @@ dispatch_command <- function(chat_id, text) {
       "📊 Data Commands:",
       "  /status - Show all sensor readings",
       "  /alarms - Show only active alarms",
+      "  /stations - List all available stations",
       "  /latest <station> - Show specific station",
       "  /1d <station> <param> - Plot last 1 day",
       "  /3d <station> <param> - Plot last 3 days",
