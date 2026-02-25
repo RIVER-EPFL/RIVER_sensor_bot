@@ -90,13 +90,85 @@ map_param_name <- function(param_name) {
 }
 
 get_param_status <- function(param_name, value) {
+  val <- value
+  
+  # Battery Voltage
   if (grepl("BattV", param_name, ignore.case = TRUE)) {
-    if (value < 11.5) {
+    if (val < 10.8) {
       return(list(severity = 2, status = "Alarm"))
-    } else if (value < 12.0) {
+    } else if (val < 11.4) {
       return(list(severity = 1, status = "Warning"))
+    } else {
+      return(list(severity = 0, status = "OK"))
     }
   }
+  
+  # Depth
+  if (grepl("Depthmm", param_name, ignore.case = TRUE)) {
+    if (val < 0 || val > 2000) {
+      return(list(severity = 2, status = "Alarm"))
+    } else if ((val >= 0 && val <= 100) || (val >= 1000 && val <= 2000)) {
+      return(list(severity = 1, status = "Warning"))
+    } else {
+      return(list(severity = 0, status = "OK"))
+    }
+  }
+  
+  # CDOM
+  if (grepl("CDOMppb", param_name, ignore.case = TRUE)) {
+    if (val < 0 || val > 150) {
+      return(list(severity = 2, status = "Alarm"))
+    } else if (val >= 100 && val <= 150) {
+      return(list(severity = 1, status = "Warning"))
+    } else {
+      return(list(severity = 0, status = "OK"))
+    }
+  }
+  
+  # Turbidity
+  if (grepl("TurbNTU", param_name, ignore.case = TRUE)) {
+    if (val < 0 || val > 500) {
+      return(list(severity = 2, status = "Alarm"))
+    } else if (val >= 100 && val <= 500) {
+      return(list(severity = 1, status = "Warning"))
+    } else {
+      return(list(severity = 0, status = "OK"))
+    }
+  }
+  
+  # Dissolved O2
+  if (grepl("DOuM", param_name, ignore.case = TRUE)) {
+    if (val < 0 || val > 625) {
+      return(list(severity = 2, status = "Alarm"))
+    } else if (val < 120 || val > 360) {
+      return(list(severity = 1, status = "Warning"))
+    } else {
+      return(list(severity = 0, status = "OK"))
+    }
+  }
+  
+  # Conductivity
+  if (grepl("ConduS[Cc]m", param_name, ignore.case = TRUE)) {
+    if (val < 0 || val > 1000) {
+      return(list(severity = 2, status = "Alarm"))
+    } else if (val < 100 || val > 900) {
+      return(list(severity = 1, status = "Warning"))
+    } else {
+      return(list(severity = 0, status = "OK"))
+    }
+  }
+  
+  # Water Temperature (DOdegC, DOTdegC, and CondTdegC)
+  if (grepl("DOdegC|DOTdegC|CondTdegC", param_name, ignore.case = TRUE)) {
+    if (val < 0 || val > 25) {
+      return(list(severity = 2, status = "Alarm"))
+    } else if (val < 0.5 || val > 20) {
+      return(list(severity = 1, status = "Warning"))
+    } else {
+      return(list(severity = 0, status = "OK"))
+    }
+  }
+  
   return(list(severity = 0, status = "OK"))
 }
 
@@ -676,6 +748,169 @@ map_param_acronym <- function(acronym) {
   return(acronym)
 }
 
+# Battery forecasting function
+forecast_battery <- function(station_name) {
+  # Get current data to find the battery voltage location ID
+  current_data <- read_status()
+  if (is.null(current_data)) {
+    log_message("No current data available")
+    return(NULL)
+  }
+  
+  # Find matching station and Battery Voltage parameter
+  matched <- current_data[
+    tolower(current_data$station) == tolower(station_name) & 
+    grepl("battery", current_data$parameter, ignore.case = TRUE), 
+  ]
+  
+  if (nrow(matched) == 0) {
+    log_message("No battery voltage sensor found for station:", station_name)
+    return(NULL)
+  }
+  
+  location_id <- matched$location_id[1]
+  
+  if (is.na(location_id) || !nzchar(location_id)) {
+    log_message("Location ID not available")
+    return(NULL)
+  }
+  
+  log_message("Fetching 7 days of battery data for:", station_name)
+  
+  # Fetch 7 days of historical data
+  history_data <- fetch_historical_for_plot(location_id, 7)
+  
+  if (is.null(history_data) || nrow(history_data) < 3) {
+    log_message("Insufficient historical data")
+    return(NULL)
+  }
+  
+  # Convert timestamps and values
+  times <- tryCatch({
+    # Try to convert timestamps - they should be numeric Unix timestamps
+    as.POSIXct(as.numeric(history_data$timestamp), 
+               origin = "1970-01-01", tz = "Europe/Zurich")
+  }, error = function(e) {
+    log_message("Error parsing timestamps:", e$message)
+    log_message("Timestamp sample:", head(history_data$timestamp, 3))
+    NULL
+  })
+  
+  if (is.null(times)) {
+    log_message("Failed to parse timestamps, aborting forecast")
+    return(NULL)
+  }
+  
+  values <- as.numeric(history_data$value)
+  
+  # Filter valid data
+  if ("valid" %in% names(history_data)) {
+    valid_mask <- as.logical(history_data$valid)
+    times <- times[valid_mask]
+    values <- values[valid_mask]
+  }
+  
+  # Extract 4AM readings (between 3:30 and 4:30)
+  hours <- as.numeric(format(times, "%H"))
+  minutes <- as.numeric(format(times, "%M"))
+  
+  # Find readings close to 1AM (1:30 to 2:30)
+  am4_mask <- (hours == 2) | (hours == 3 & minutes >= 30) | (hours == 4 & minutes <= 30)
+  
+  if (sum(am4_mask) < 2) {
+    log_message("Not enough 2AM readings found")
+    return(NULL)
+  }
+  
+  am4_times <- times[am4_mask]
+  am4_values <- values[am4_mask]
+  
+  # Get one reading per day (closest to 4AM)
+  dates <- as.Date(am4_times, tz = "Europe/Zurich")
+  unique_dates <- unique(dates)
+  
+  daily_times <- c()
+  daily_values <- c()
+  
+  for (i in seq_along(unique_dates)) {
+    d <- unique_dates[i]
+    day_mask <- dates == d
+    day_times <- am4_times[day_mask]
+    day_values <- am4_values[day_mask]
+    
+    # Find reading closest to 4AM
+    target_time <- as.POSIXct(paste(as.character(d), "04:00:00"), tz = "Europe/Zurich")
+    time_diffs <- abs(difftime(day_times, target_time, units = "mins"))
+    closest_idx <- which.min(time_diffs)
+    
+    daily_times <- c(daily_times, as.numeric(day_times[closest_idx]))
+    daily_values <- c(daily_values, day_values[closest_idx])
+  }
+  
+  daily_times <- as.POSIXct(daily_times, origin = "1970-01-01", tz = "Europe/Zurich")
+  
+  if (length(daily_values) < 2) {
+    log_message("Not enough daily readings")
+    return(NULL)
+  }
+  
+  # Fit linear model (voltage vs days since first reading)
+  days_numeric <- as.numeric(difftime(daily_times, daily_times[1], units = "days"))
+  
+  tryCatch({
+    model <- lm(daily_values ~ days_numeric)
+    slope <- coef(model)[2]
+    intercept <- coef(model)[1]
+    
+    log_message("Battery trend - Slope:", round(slope, 4), "V/day, Intercept:", round(intercept, 2), "V")
+    
+    # Predict when battery will reach 10.5V
+    threshold <- 10.5
+    current_voltage <- tail(daily_values, 1)
+    
+    if (slope >= 0) {
+      # Battery is charging or stable
+      return(list(
+        status = "stable",
+        current = current_voltage,
+        slope = slope,
+        message = sprintf("🔋 Battery Forecast\n📍 %s\n\n✅ Battery is stable/charging (%.2f V/day)\n🔋 Current: %.2f V", 
+                         station_name, slope, current_voltage)
+      ))
+    }
+    
+    # Calculate days until threshold
+    days_to_threshold <- (threshold - intercept) / slope - max(days_numeric)
+    
+    if (days_to_threshold <= 0) {
+      # Already below threshold or will never reach it
+      return(list(
+        status = "critical",
+        current = current_voltage,
+        slope = slope,
+        message = sprintf("Battery already critical! Current: %.2f V (%.3f V/day)", current_voltage, slope)
+      ))
+    }
+    
+    forecast_date <- Sys.Date() + days_to_threshold
+    
+    return(list(
+      status = "forecast",
+      current = current_voltage,
+      slope = slope,
+      days_remaining = round(days_to_threshold, 1),
+      forecast_date = forecast_date,
+      message = sprintf("📉 Battery Forecast\n📍 %s\n\n🔋 Current: %.2f V\n📊 Trend: %.3f V/day\n⚠️ Will reach 10.5V in ~%.1f days\n📅 Estimated date: %s",
+                       station_name, current_voltage, slope, days_to_threshold, 
+                       format(forecast_date, "%Y-%m-%d"))
+    ))
+    
+  }, error = function(e) {
+    log_message("Error in linear model:", e$message)
+    return(NULL)
+  })
+}
+
 dispatch_command <- function(chat_id, text) {
   cmd <- tolower(trimws(text))
   
@@ -809,6 +1044,94 @@ dispatch_command <- function(chat_id, text) {
     
     send_message(chat_id, paste(lines, collapse = "\n"))
     
+  } else if (cmd == "/battery" || startsWith(cmd, "/battery ")) {
+    parts <- strsplit(text, "\\s+", perl = TRUE)[[1]]
+    
+    # If no station specified, forecast all stations
+    if (length(parts) < 2) {
+      data <- read_status()
+      if (is.null(data)) {
+        send_message(chat_id, "❌ Data unavailable")
+        return()
+      }
+      
+      # Get all stations with battery voltage
+      battery_stations <- unique(data[grepl("battery", data$parameter, ignore.case = TRUE), "station"])
+      
+      if (length(battery_stations) == 0) {
+        send_message(chat_id, "No stations with battery voltage found")
+        return()
+      }
+      
+      send_message(chat_id, paste0("🔋 Analyzing battery trends for ", length(battery_stations), " stations..."))
+      
+      results <- list()
+      for (station in battery_stations) {
+        result <- tryCatch({
+          forecast_battery(station)
+        }, error = function(e) {
+          log_message("Error in forecast_battery for", station, ":", e$message)
+          NULL
+        })
+        if (!is.null(result)) {
+          results[[station]] <- result
+        }
+      }
+      
+      if (length(results) == 0) {
+        send_message(chat_id, "❌ Could not generate forecasts")
+        return()
+      }
+      
+      # Wait 3 seconds before sending results
+      Sys.sleep(3)
+      
+      # Combine all results into a single simplified message
+      combined_message <- "🔋 Battery Status\n━━━━━━━━━━━━━━━━━━━━\n\n"
+      
+      for (station in names(results)) {
+        res <- results[[station]]
+        if (res$status == "stable") {
+          combined_message <- paste0(combined_message, 
+                                    "📍 ", station, "\n",
+                                    "✅ Stable (", sprintf("%.2f", res$slope), " V/day)\n",
+                                    "🔋 ", sprintf("%.2f", res$current), " V\n\n")
+        } else if (res$status == "critical") {
+          combined_message <- paste0(combined_message,
+                                    "📍 ", station, "\n",
+                                    "⚠️ CRITICAL\n",
+                                    "🔋 ", sprintf("%.2f", res$current), " V\n\n")
+        } else {
+          combined_message <- paste0(combined_message,
+                                    "📍 ", station, "\n",
+                                    "📉 ", sprintf("%.2f", res$current), " V (", sprintf("%.3f", res$slope), " V/day)\n",
+                                    "⚠️ 10.5V in ~", round(res$days_remaining), " days\n",
+                                    "📅 ", format(res$forecast_date, "%Y-%m-%d"), "\n\n")
+        }
+      }
+      
+      send_message(chat_id, combined_message)
+      
+    } else {
+      # Single station forecast
+      station_query <- paste(parts[-1], collapse = " ")
+      
+      send_message(chat_id, paste0("🔋 Analyzing battery trend for ", station_query, "..."))
+      
+      result <- tryCatch({
+        forecast_battery(station_query)
+      }, error = function(e) {
+        log_message("Error in forecast_battery:", e$message)
+        NULL
+      })
+      
+      if (!is.null(result)) {
+        send_message(chat_id, result$message)
+      } else {
+        send_message(chat_id, paste0("❌ Could not forecast battery for ", station_query, "\nMake sure the station has battery voltage data."))
+      }
+    }
+    
   } else if (cmd == "/stations") {
     data <- read_status()
     if (is.null(data)) {
@@ -839,6 +1162,7 @@ dispatch_command <- function(chat_id, text) {
       "  /3d <station> <param> - Plot last 3 days",
       "  /7d <station> <param> - Plot last 7 days",
       "  /30d <station> <param> - Plot last 30 days",
+      "  /battery [station] - Forecast battery (all or one)",
       "",
       "🔔 Alarm Management:",
       "  /mute <station> <param> [Xd] - Mute alarms",
@@ -851,6 +1175,7 @@ dispatch_command <- function(chat_id, text) {
       "",
       "📝 Examples:",
       "  /latest martigny",
+      "  /battery verbier",
       "  /1d verbier volt",
       "  /7d martigny depth",
       "  /30d saxon turb",
@@ -873,6 +1198,14 @@ process_updates <- function(updates) {
     chat_id <- as.numeric(updates$message.chat.id[i])
     text <- as.character(updates$message.text[i])
     
+    # Skip messages from the bot itself
+    if ("message.from.is_bot" %in% names(updates)) {
+      if (isTRUE(updates$message.from.is_bot[i])) next
+    }
+    
+    # Skip non-command messages
+    if (!startsWith(text, "/")) next
+    
     if (!(chat_id %in% allowed_chat_ids)) next
     
     log_message("Command from", chat_id, ":", text)
@@ -889,6 +1222,70 @@ load_alarm_state <- function() {
 save_alarm_state <- function(state) {
   tryCatch(saveRDS(state, ALARM_STATE_FILE), error = function(e) {
     log_message("Failed to save alarm state:", e$message)
+  })
+}
+
+# Check battery forecasts and send alarms
+check_battery_forecasts <- function() {
+  tryCatch({
+    data <- read_status()
+    if (is.null(data) || nrow(data) == 0) return()
+    
+    # Get all stations with battery voltage
+    battery_stations <- unique(data[grepl("battery", data$parameter, ignore.case = TRUE), "station"])
+    
+    if (length(battery_stations) == 0) return()
+    
+    critical_forecasts <- list()
+    
+    for (station in battery_stations) {
+      result <- tryCatch({
+        forecast_battery(station)
+      }, error = function(e) {
+        NULL
+      })
+      
+      if (!is.null(result) && result$status == "depleting") {
+        # Check if battery will reach 10.5V within 7 days
+        if (result$days_remaining <= 7) {
+          critical_forecasts[[station]] <- result
+        }
+      }
+    }
+    
+    if (length(critical_forecasts) == 0) return()
+    
+    # Check which forecasts are new (not already alarmed)
+    for (station in names(critical_forecasts)) {
+      forecast_key <- paste(station, "Battery Forecast", sep = "|")
+      
+      # Check if already muted
+      if (is_muted(station, "Battery Forecast")) {
+        log_message("Skipped muted battery forecast alarm:", station)
+        next
+      }
+      
+      result <- critical_forecasts[[station]]
+      
+      msg <- sprintf("⚠️ BATTERY FORECAST ALARM\n📍 Station: %s\n🔋 Current: %.2f V\n📉 Trend: %.3f V/day\n⏰ Will reach 10.5V in ~%d days\n📅 Estimated: %s",
+                    station, 
+                    result$current, 
+                    result$slope, 
+                    round(result$days_remaining),
+                    format(result$forecast_date, "%Y-%m-%d"))
+      
+      for (chat_id in allowed_chat_ids) {
+        send_message(chat_id, msg)
+      }
+      
+      # Auto-mute this forecast alarm for this station (mute for 24 hours)
+      mute_alarm(station, "Battery Forecast", 24)
+      
+      log_message("Sent battery forecast alarm for:", station, "- Auto-muted for 24h")
+    }
+    
+  }, error = function(e) {
+    log_message("Error in check_battery_forecasts:", e$message)
   })
 }
 
@@ -996,16 +1393,22 @@ main <- function() {
         log_message("Checking for alarms...")
         clean_expired_mutes()  # Clean up expired mutes
         broadcast_alarms()
+        check_battery_forecasts()  # Check battery forecast alarms
         last_alarm_check <- current_time
       }
       
       # Poll Telegram
-      updates <- get_updates(if (last_update_id == 0) NULL else last_update_id + 1)
+      updates <- tryCatch({
+        get_updates(if (last_update_id == 0) NULL else last_update_id + 1)
+      }, error = function(e) {
+        log_message("Error in get_updates:", e$message)
+        data.frame()
+      })
       
-      if (nrow(updates) > 0 && "update_id" %in% names(updates)) {
+      if (!is.null(updates) && nrow(updates) > 0 && "update_id" %in% names(updates)) {
+        log_message("Received", nrow(updates), "update(s)")
         last_update_id <- max(updates$update_id, na.rm = TRUE)
         process_updates(updates)
-        GET(paste0(base_url, "/getUpdates?offset=", last_update_id + 1))
       }
       
     }, error = function(e) {

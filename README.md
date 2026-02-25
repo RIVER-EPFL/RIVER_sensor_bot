@@ -8,6 +8,7 @@ A Telegram bot that fetches ViewLinc sensor data every 60 seconds and provides r
 
 - Direct ViewLinc API integration with 60-second refresh intervals
 - Real-time alarm notifications and monitoring
+- **Battery forecast alarms** - Automatic alerts when batteries predicted to fail within 7 days
 - **Time-series plotting** with on-demand historical data fetching (1d, 3d, 7d, 30d)
 - **Time-based alarm muting** (mute for X days with automatic expiration)
 - Telegram command interface for sensor queries
@@ -48,6 +49,7 @@ See `INSTALL.md` for detailed setup instructions.
 /alarms                    - Show active alarms only
 /stations                  - List all available stations
 /latest <station>          - Show readings for specific station
+/battery [station]         - Battery forecast (all stations or specific)
 /1d <station> <param>      - Plot last 1 day of data
 /3d <station> <param>      - Plot last 3 days of data
 /7d <station> <param>      - Plot last 7 days of data
@@ -69,9 +71,11 @@ See `INSTALL.md` for detailed setup instructions.
 
 **Examples:**
 ```
-/latest station1
-/7d station2 volt
-/mute station3 turb 7d
+/latest Martigny
+/battery                   - Forecast all battery stations
+/battery Verbier           - Forecast specific station
+/7d Saxon volt
+/mute "Les Dailles" turb 7d
 ```
 
 ## Service Management
@@ -127,5 +131,27 @@ The bot operates three concurrent loops:
 - **Data refresh**: Fetches from ViewLinc API every 60 seconds
 - **Command polling**: Checks Telegram for commands every 2 seconds  
 - **Alarm monitoring**: Evaluates and notifies on alarms every 10 minutes
+  - Includes battery forecast alarms (auto-muted for 24h after notification)
+  - Alerts when batteries predicted to reach 10.5V within ≤7 days
 - **On-demand plotting**: Fetches historical data from ViewLinc API when plot commands are used
+
+## Battery Forecast System
+
+The bot automatically monitors battery health using linear regression on historical voltage data:
+
+- **Forecast calculation**: Uses 7 days of 2 AM voltage readings to predict battery depletion
+- **Automatic alarms**: Sends alert when battery predicted to reach 10.5V within 7 days or less
+- **Auto-mute**: Each battery forecast alarm is automatically muted for 24 hours to prevent spam
+- **Manual check**: Use `/battery` to view forecasts for all stations anytime
+- **Trend display**: Shows voltage trend (V/day) for declining batteries
+
+**Forecast message format:**
+```
+⚠️ BATTERY FORECAST ALARM
+📍 Station: Verbier
+🔋 Current: 11.62 V
+📉 Trend: -0.015 V/day
+⏰ Will reach 10.5V in ~7 days
+📅 Estimated: 2026-03-04
+```
 
