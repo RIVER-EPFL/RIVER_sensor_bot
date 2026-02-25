@@ -1,0 +1,5 @@
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+TELEGRAM_ALLOWED_CHAT_IDS=your_chat_id_here
+VIEWLINC_TOKEN=your_viewlinc_token_here
+VIEWLINC_SERVER=https://10.95.35.5
+BOT_BASE_DIR=/home/river/Desktop/monitoring

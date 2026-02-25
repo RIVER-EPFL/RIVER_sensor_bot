@@ -1,0 +1,17 @@
+# Environment variables with secrets
+.Renviron
+
+# Data files
+data/
+*.rds
+
+# R files
+.Rhistory
+.RData
+.Rproj.user
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
