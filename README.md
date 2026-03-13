@@ -8,7 +8,9 @@ A Telegram bot that fetches ViewLinc sensor data every 60 seconds and provides r
 
 - Direct ViewLinc API integration with 60-second refresh intervals
 - Real-time alarm notifications and monitoring
+- **Device monitoring** - Automatic monitoring of VPN server, field routers, and vNETs with 1-hour offline delay before alarms
 - **Battery forecast alarms** - Automatic alerts when batteries predicted to fail within 7 days
+- **CO2 monitoring** - Full support for CO2 parameter with configurable alarm thresholds
 - **Time-series plotting** with on-demand historical data fetching (1d, 3d, 7d, 30d)
 - **Time-based alarm muting** (mute for X days with automatic expiration)
 - Telegram command interface for sensor queries
@@ -37,6 +39,19 @@ TELEGRAM_ALLOWED_CHAT_IDS=your_chat_id
 VIEWLINC_TOKEN=your_viewlinc_token
 VIEWLINC_SERVER=https://your-viewlinc-server
 BOT_BASE_DIR=/path/to/bot/directory
+
+# Device monitoring hosts
+VPN_SERVER=your.vpn.server.com
+ROUTER_MARTIGNY=10.0.0.1
+ROUTER_SAXON=10.0.0.2
+ROUTER_BAGNES=10.0.0.3
+ROUTER_DAILLES=10.0.0.4
+VNET_MARTIGNY1=192.168.1.1
+VNET_MARTIGNY2=192.168.1.2
+VNET_SAXON1=192.168.2.1
+VNET_SAXON2=192.168.2.2
+VNET_VERBIER1=192.168.3.1
+VNET_DAILLES1=192.168.4.1
 ```
 
 See `INSTALL.md` for detailed setup instructions.
@@ -66,6 +81,8 @@ See `INSTALL.md` for detailed setup instructions.
 **System & Utilities:**
 ```
 /ping                      - Test bot connectivity
+/server                    - Check device status (VPN, routers, vNETs)
+/thresholds                - Show all parameter alarm thresholds
 /help                      - Display help message
 ```
 
@@ -131,7 +148,9 @@ The bot operates three concurrent loops:
 - **Data refresh**: Fetches from ViewLinc API every 60 seconds
 - **Command polling**: Checks Telegram for commands every 2 seconds  
 - **Alarm monitoring**: Evaluates and notifies on alarms every 10 minutes
-  - Includes battery forecast alarms (auto-muted for 24h after notification)
+  - Sensor parameter alarms (Depth, CDOM, Turbidity, DO, CO2, Conductivity, Temperature, Battery)
+  - Battery forecast alarms (auto-muted for 24h after notification)
+  - Device monitoring alarms (VPN, routers, vNETs - only after 1 hour offline)
   - Alerts when batteries predicted to reach 10.5V within ≤7 days
 - **On-demand plotting**: Fetches historical data from ViewLinc API when plot commands are used
 
@@ -154,4 +173,40 @@ The bot automatically monitors battery health using linear regression on histori
 ⏰ Will reach 10.5V in ~7 days
 📅 Estimated: 2026-03-04
 ```
+
+## Device Monitoring System
+
+The bot automatically monitors network infrastructure health:
+
+- **Monitored devices**: VPN server, 4 field routers (Martigny, Saxon, Bagnes, Les Dailles), 6 vNETs, ViewLinc VM
+- **Ping frequency**: Every 10 minutes
+- **Alarm delay**: Only sends alarm after device is offline for ≥1 hour (prevents false alarms)
+- **Offline tracking**: Tracks offline duration with timestamps
+- **Recovery notifications**: Sends alert when device comes back online (only if alarm was sent)
+- **Manual check**: Use `/server` to view current status of all devices anytime
+
+**Device alarm message format:**
+```
+🔴 DEVICE ALARM
+📍 Device: Martigny Router
+❌ Status: OFFLINE for 1.2 hours
+```
+
+**Device recovery message format:**
+```
+✅ DEVICE RECOVERED
+📍 Device: Martigny Router
+✓ Status: ONLINE
+```
+
+## Parameter Thresholds
+
+Use `/thresholds` command to view all alarm thresholds, including:
+
+- **Battery Voltage**: Alarm <10.8V, Warning 10.8-11.4V, OK ≥11.4V
+- **CO2**: Alarm <150 or >5000 ppm, Warning 3000-5000 ppm, OK 150-3000 ppm
+- **Dissolved O2**: Alarm <0 or >625 µM, Warning <120 or >360 µM, OK 120-360 µM
+- **Conductivity**: Alarm <0 or >1000 µS/cm, Warning <100 or >900 µS/cm, OK 100-900 µS/cm
+- **Water Temperature**: Alarm <0 or >25°C, Warning <0.5 or >20°C, OK 0.5-20°C
+- And more...
 
