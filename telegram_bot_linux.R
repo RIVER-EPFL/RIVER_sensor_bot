@@ -74,10 +74,11 @@ PARAM_MAPPING <- list(
   list(pattern = "CDOMppb", name = "CDOM", order = 2),
   list(pattern = "TurbNTU", name = "Turbidity", order = 3),
   list(pattern = "DOuM", name = "Dissolved O2", order = 4),
-  list(pattern = "ConduS[Cc]m", name = "Conductivity", order = 5),
-  list(pattern = "DOdegC|DOTdegC", name = "Water Temperature", order = 6),
-  list(pattern = "CondTdegC", name = "Temperature_Cond", order = 7),
-  list(pattern = "BattV", name = "Battery Voltage", order = 8)
+  list(pattern = "CO2ppm", name = "CO2", order = 5),
+  list(pattern = "ConduS[Cc]m", name = "Conductivity", order = 6),
+  list(pattern = "DOdegC|DOTdegC", name = "Water Temperature", order = 7),
+  list(pattern = "CondTdegC", name = "Temperature_Cond", order = 8),
+  list(pattern = "BattV", name = "Battery Voltage", order = 9)
 )
 
 map_param_name <- function(param_name) {
@@ -169,6 +170,17 @@ get_param_status <- function(param_name, value) {
     }
   }
   
+  # CO2
+  if (grepl("CO2ppm", param_name, ignore.case = TRUE)) {
+    if (val < 150 || val > 5000) {
+      return(list(severity = 2, status = "Alarm"))
+    } else if (val >= 4000 && val <= 5000) {
+      return(list(severity = 1, status = "Warning"))
+    } else {
+      return(list(severity = 0, status = "OK"))
+    }
+  }
+  
   return(list(severity = 0, status = "OK"))
 }
 
@@ -176,6 +188,81 @@ clean_token <- function(token) {
   decoded <- rawToChar(base64enc::base64decode(token))
   decoded_clean <- gsub("[\r\n]+$", "", decoded)
   base64enc::base64encode(charToRaw(decoded_clean))
+}
+
+# Device monitoring - Load from environment variables
+VPN_SERVER <- Sys.getenv("VPN_SERVER", "")
+ROUTER_MARTIGNY <- Sys.getenv("ROUTER_MARTIGNY", "")
+ROUTER_SAXON <- Sys.getenv("ROUTER_SAXON", "")
+ROUTER_BAGNES <- Sys.getenv("ROUTER_BAGNES", "")
+ROUTER_DAILLES <- Sys.getenv("ROUTER_DAILLES", "")
+VNET_MARTIGNY1 <- Sys.getenv("VNET_MARTIGNY1", "")
+VNET_MARTIGNY2 <- Sys.getenv("VNET_MARTIGNY2", "")
+VNET_SAXON1 <- Sys.getenv("VNET_SAXON1", "")
+VNET_SAXON2 <- Sys.getenv("VNET_SAXON2", "")
+VNET_VERBIER1 <- Sys.getenv("VNET_VERBIER1", "")
+VNET_DAILLES1 <- Sys.getenv("VNET_DAILLES1", "")
+
+DEVICES <- list(
+  vpn_server = list(name = "VPN Server", host = VPN_SERVER, type = "ping"),
+  router_martigny = list(name = "Martigny Router", host = ROUTER_MARTIGNY, type = "ping"),
+  router_saxon = list(name = "Saxon Router", host = ROUTER_SAXON, type = "ping"),
+  router_bagnes = list(name = "Bagnes Router", host = ROUTER_BAGNES, type = "ping"),
+  router_dailles = list(name = "Les Dailles Router", host = ROUTER_DAILLES, type = "ping"),
+  vnet_martigny1 = list(name = "Martigny vNET 1", host = VNET_MARTIGNY1, type = "ping"),
+  vnet_martigny2 = list(name = "Martigny vNET 2", host = VNET_MARTIGNY2, type = "ping"),
+  vnet_saxon1 = list(name = "Saxon vNET 1", host = VNET_SAXON1, type = "ping"),
+  vnet_saxon2 = list(name = "Saxon vNET 2", host = VNET_SAXON2, type = "ping"),
+  vnet_verbier1 = list(name = "Verbier vNET 1", host = VNET_VERBIER1, type = "ping"),
+  vnet_dailles1 = list(name = "Les Dailles vNET 1", host = VNET_DAILLES1, type = "ping"),
+  viewlinc_vm = list(name = "ViewLinc VM", host = VIEWLINC_SERVER, type = "api")
+)
+
+ping_host <- function(host, timeout = 2) {
+  tryCatch({
+    # Use system ping command (works on Linux)
+    result <- system(paste0("ping -c 1 -W ", timeout, " ", host, " > /dev/null 2>&1"), 
+                    intern = FALSE, ignore.stdout = TRUE, ignore.stderr = TRUE)
+    return(result == 0)
+  }, error = function(e) {
+    return(FALSE)
+  })
+}
+
+check_viewlinc_api <- function() {
+  tryCatch({
+    # Try to fetch locations as a connectivity test
+    result <- fetch_viewlinc("locations")
+    return(!is.null(result))
+  }, error = function(e) {
+    return(FALSE)
+  })
+}
+
+check_infrastructure <- function() {
+  results <- list()
+  
+  for (key in names(DEVICES)) {
+    device <- DEVICES[[key]]
+    
+    status <- if (device$type == "ping") {
+      ping_host(device$host)
+    } else if (device$type == "api") {
+      check_viewlinc_api()
+    } else {
+      FALSE
+    }
+    
+    results[[key]] <- list(
+      name = device$name,
+      host = device$host,
+      type = device$type,
+      status = status,
+      timestamp = Sys.time()
+    )
+  }
+  
+  return(results)
 }
 
 fetch_viewlinc <- function(endpoint, method = "GET") {
@@ -1149,6 +1236,104 @@ dispatch_command <- function(chat_id, text) {
   } else if (cmd == "/ping") {
     send_message(chat_id, "🏓 pong")
     
+  } else if (cmd == "/server") {
+    send_message(chat_id, "🔍 Checking device status...")
+    
+    device_status <- check_infrastructure()
+    check_time <- format(Sys.time(), "%H:%M", tz = "Europe/Zurich")
+    
+    # Group by category
+    vpn_status <- device_status$vpn_server
+    routers <- device_status[grepl("^router_", names(device_status))]
+    vnets <- device_status[grepl("^vnet_", names(device_status))]
+    viewlinc <- device_status$viewlinc_vm
+    
+    # Build status message
+    lines <- c("🖥️ Device Status", "━━━━━━━━━━━━━━━━━━━━", "")
+    
+    # VPN Server
+    vpn_icon <- if (vpn_status$status) "✅" else "❌"
+    vpn_name <- sub("\\.synology\\.me$", "", vpn_status$host)  # Remove .synology.me
+    lines <- c(lines, "🌐 VPN Server:")
+    lines <- c(lines, paste0(vpn_icon, " ", vpn_name), "")
+    
+    # Field Routers
+    lines <- c(lines, "📡 Field Routers:")
+    for (router in routers) {
+      icon <- if (router$status) "✅" else "❌"
+      lines <- c(lines, paste0(icon, " ", router$name))
+    }
+    lines <- c(lines, "")
+    
+    # vNETs
+    lines <- c(lines, "🔌 vNETs:")
+    for (vnet in vnets) {
+      icon <- if (vnet$status) "✅" else "❌"
+      lines <- c(lines, paste0(icon, " ", vnet$name))
+    }
+    lines <- c(lines, "")
+    
+    # ViewLinc VM
+    viewlinc_icon <- if (viewlinc$status) "✅" else "❌"
+    lines <- c(lines, "💾 ViewLinc VM:")
+    lines <- c(lines, paste0(viewlinc_icon, " API connectivity"))
+    
+    # Summary
+    total <- length(device_status)
+    online <- sum(sapply(device_status, function(x) x$status))
+    lines <- c(lines, "", "━━━━━━━━━━━━━━━━━━━━")
+    lines <- c(lines, paste0("📊 Summary: ", online, "/", total, " devices online ", check_time))
+    
+    send_message(chat_id, paste(lines, collapse = "\n"))
+    
+  } else if (cmd == "/thresholds") {
+    threshold_text <- paste(
+      "📊 Parameter Alarm Thresholds",
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+      "",
+      "🔋 Battery Voltage:",
+      "  🔴 Alarm: < 10.8 V",
+      "  ⚠️ Warning: 10.8-11.4 V",
+      "  ✅ OK: ≥ 11.4 V",
+      "",
+      "📏 Depth:",
+      "  🔴 Alarm: < 0 or > 2000 mm",
+      "  ⚠️ Warning: 0-100 or 1000-2000 mm",
+      "  ✅ OK: 100-1000 mm",
+      "",
+      "🟡 CDOM:",
+      "  🔴 Alarm: < 0 or > 150 ppb",
+      "  ⚠️ Warning: 100-150 ppb",
+      "  ✅ OK: 0-100 ppb",
+      "",
+      "🌫️ Turbidity:",
+      "  🔴 Alarm: < 0 or > 500 NTU",
+      "  ⚠️ Warning: 100-500 NTU",
+      "  ✅ OK: 0-100 NTU",
+      "",
+      "💨 Dissolved O2:",
+      "  🔴 Alarm: < 0 or > 625 µM",
+      "  ⚠️ Warning: < 120 or > 360 µM",
+      "  ✅ OK: 120-360 µM",
+      "",
+      "🫧 CO2:",
+      "  🔴 Alarm: < 150 or > 5000 ppm",
+      "  ⚠️ Warning: 4000-5000 ppm",
+      "  ✅ OK: 150-4000 ppm",
+      "",
+      "⚡ Conductivity:",
+      "  🔴 Alarm: < 0 or > 1000 µS/cm",
+      "  ⚠️ Warning: < 100 or > 900 µS/cm",
+      "  ✅ OK: 100-900 µS/cm",
+      "",
+      "🌡️ Water Temperature:",
+      "  🔴 Alarm: < 0 or > 25 °C",
+      "  ⚠️ Warning: < 0.5 or > 20 °C",
+      "  ✅ OK: 0.5-20 °C",
+      sep = "\n"
+    )
+    send_message(chat_id, threshold_text)
+    
   } else if (cmd == "/help") {
     help_text <- paste(
       "🤖 River Bot Commands:",
@@ -1171,6 +1356,8 @@ dispatch_command <- function(chat_id, text) {
       "",
       "🔧 System:",
       "  /ping - Test bot connectivity",
+      "  /server - Check device status",
+      "  /thresholds - Show alarm thresholds",
       "  /help - Show this message",
       "",
       "📝 Examples:",
@@ -1289,6 +1476,102 @@ check_battery_forecasts <- function() {
   })
 }
 
+# Device alarm state file with timestamps
+DEVICE_STATE_FILE <- file.path(DATA_DIR, "device_state.rds")
+
+load_device_state <- function() {
+  if (!file.exists(DEVICE_STATE_FILE)) return(list())
+  tryCatch(readRDS(DEVICE_STATE_FILE), error = function(e) list())
+}
+
+save_device_state <- function(state) {
+  tryCatch(saveRDS(state, DEVICE_STATE_FILE), error = function(e) {
+    log_message("Failed to save device state:", e$message)
+  })
+}
+
+# Check devices and send alarms for offline devices (only after 1 hour)
+check_infrastructure_alarms <- function() {
+  tryCatch({
+    device_status <- check_infrastructure()
+    current_time <- Sys.time()
+    
+    # Load previous state (list with device_name -> list(offline_since, alarm_sent))
+    device_state <- load_device_state()
+    
+    # Track which devices are currently offline
+    current_offline <- list()
+    
+    for (key in names(device_status)) {
+      device <- device_status[[key]]
+      device_name <- device$name
+      
+      if (!device$status) {
+        # Device is offline
+        if (device_name %in% names(device_state)) {
+          # Device was already offline - keep existing timestamp
+          current_offline[[device_name]] <- device_state[[device_name]]
+        } else {
+          # Device just went offline - record timestamp
+          current_offline[[device_name]] <- list(
+            offline_since = current_time,
+            alarm_sent = FALSE
+          )
+          log_message("Device went offline:", device_name)
+        }
+        
+        # Check if device has been offline for more than 1 hour
+        offline_duration <- as.numeric(difftime(current_time, current_offline[[device_name]]$offline_since, units = "hours"))
+        
+        if (offline_duration >= 1 && !current_offline[[device_name]]$alarm_sent) {
+          # Check if muted
+          if (is_muted(device_name, "Device")) {
+            log_message("Skipped muted device alarm:", device_name)
+            current_offline[[device_name]]$alarm_sent <- TRUE
+            next
+          }
+          
+          # Send alarm
+          msg <- sprintf("🔴 DEVICE ALARM\n📍 Device: %s\n❌ Status: OFFLINE for %.1f hours",
+                        device_name,
+                        offline_duration)
+          
+          for (chat_id in allowed_chat_ids) {
+            send_message(chat_id, msg)
+          }
+          log_message("Sent device alarm:", device_name, "- offline for", round(offline_duration, 1), "hours")
+          
+          # Mark alarm as sent
+          current_offline[[device_name]]$alarm_sent <- TRUE
+        }
+      } else {
+        # Device is online
+        if (device_name %in% names(device_state)) {
+          # Device recovered
+          if (device_state[[device_name]]$alarm_sent) {
+            # Only send recovery if alarm was sent
+            msg <- sprintf("✅ DEVICE RECOVERED\n📍 Device: %s\n✓ Status: ONLINE", device_name)
+            
+            for (chat_id in allowed_chat_ids) {
+              send_message(chat_id, msg)
+            }
+            log_message("Sent device recovery notification:", device_name)
+          } else {
+            log_message("Device recovered before 1 hour:", device_name)
+          }
+        }
+        # Don't add to current_offline (device is online)
+      }
+    }
+    
+    # Save current offline state
+    save_device_state(current_offline)
+    
+  }, error = function(e) {
+    log_message("Error in check_infrastructure_alarms:", e$message)
+  })
+}
+
 # Broadcast new alarms
 broadcast_alarms <- function() {
   tryCatch({
@@ -1394,6 +1677,7 @@ main <- function() {
         clean_expired_mutes()  # Clean up expired mutes
         broadcast_alarms()
         check_battery_forecasts()  # Check battery forecast alarms
+        check_infrastructure_alarms()  # Check device status
         last_alarm_check <- current_time
       }
       

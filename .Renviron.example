@@ -1,5 +1,18 @@
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 TELEGRAM_ALLOWED_CHAT_IDS=your_chat_id_here
 VIEWLINC_TOKEN=your_viewlinc_token_here
-VIEWLINC_SERVER=https://10.95.35.5
-BOT_BASE_DIR=/home/river/Desktop/monitoring
+VIEWLINC_SERVER=https://your.viewlinc.server
+BOT_BASE_DIR=/path/to/bot/directory
+
+# Infrastructure monitoring hosts
+VPN_SERVER=your.vpn.server.com
+ROUTER_MARTIGNY=10.0.0.1
+ROUTER_SAXON=10.0.0.2
+ROUTER_BAGNES=10.0.0.3
+ROUTER_DAILLES=10.0.0.4
+VNET_MARTIGNY1=192.168.1.1
+VNET_MARTIGNY2=192.168.1.2
+VNET_SAXON1=192.168.2.1
+VNET_SAXON2=192.168.2.2
+VNET_VERBIER1=192.168.3.1
+VNET_DAILLES1=192.168.4.1
